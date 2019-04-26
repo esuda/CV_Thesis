@@ -1,0 +1,753 @@
+import cv2      #Biblioteca de Visão Computacional
+import numpy as np
+import imutils      #
+from math import atan2
+import serial
+import time
+
+
+conexao = serial.Serial('/dev/ttyUSB0', 57600) # configuracao da conexao
+
+def nothing(x):
+    pass
+
+#----Função para a relação entre pixels e metros
+# Utilização: recortar um quadrado de 7.5 por 7.5 cm e ajustar pela imagem o
+# para que se enquadre na detecção da figura. Ajuste de saturação da imagem e
+# do range do tamanho do blob a ser detectado.
+def pixel2meters(frame, size):
+    img = np.zeros((1,512,3), np.uint8)
+    cv2.namedWindow('Adjust size')
+    switch1 = '0 : NOK \n1 : OK'
+    cv2.createTrackbar('uarea','Adjust size',0, 5000,nothing)
+    cv2.createTrackbar('larea','Adjust size',0, 5000,nothing)
+    cv2.createTrackbar('usat','Adjust size',0,255,nothing)
+    cv2.createTrackbar('lsat','Adjust size',0,255,nothing)
+    cv2.createTrackbar(switch1, 'Adjust size',0,1, nothing)
+
+    while (True):
+        ret, frame = cap.read()
+        cv2.imshow('Adjust size',img)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        satok = cv2.getTrackbarPos(switch1,'Adjust size')
+        adjustus = cv2.getTrackbarPos('usat','Adjust size')
+        adjustls = cv2.getTrackbarPos('lsat','Adjust size')
+        adjustareau = cv2.getTrackbarPos('uarea', 'Adjust size')
+        adjustareal = cv2.getTrackbarPos('larea', 'Adjust size')
+
+        thresh = cv2.threshold(gray, adjustls, adjustus, cv2.THRESH_BINARY)[1]
+        gaussblur = cv2.GaussianBlur(thresh, (5,5), 0)
+        cv2.imshow('Threshold', gaussblur)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+                cv2.destroyAllWindows()
+                break
+
+        else:
+            cnts = cv2.findContours(gaussblur.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            cnts = cnts[0] if imutils.is_cv2() else cnts[1]
+            for c in cnts:
+                x,y,w,h = cv2.boundingRect(c)
+                area = w*h
+                #cv2.drawContours(frame, [c], -1, (0, 255, 0), 2)
+                if adjustareal <= area <= adjustareau:
+                    #print(area)
+                    cv2.rectangle(frame, (x,y), (x+w, y+h), (0, 255, 0), 2)
+                    cv2.imshow('frame', frame)
+                    if satok == 1:
+                        ratio = size/w #ratio in m/pixel
+                        cv2.destroyAllWindows()
+                        return ratio
+
+#----Função de ajuste de saturação para pre tratamento de imagens
+def satadjust ():
+    img2 = np.zeros((1,512,3), np.uint8)
+    cv2.namedWindow('ADJUSTSAT')
+    switch2 = '0 : NOK \n1 : OK'
+    cv2.createTrackbar('usat','ADJUSTSAT',0,255,nothing)
+    cv2.createTrackbar('lsat','ADJUSTSAT',0,255,nothing)
+    cv2.createTrackbar(switch2, 'ADJUSTSAT', 0,1, nothing)
+    while (True):
+        ret, frame = cap.read()
+        cv2.imshow('ADJUSTSAT',img2)
+
+        satok = cv2.getTrackbarPos(switch2,'ADJUSTSAT')
+
+        adjustus = cv2.getTrackbarPos('usat','ADJUSTSAT')
+        adjustls = cv2.getTrackbarPos('lsat','ADJUSTSAT')
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        if satok == 1:
+            cv2.destroyWindow('ADJUSTSAT')
+            cv2.destroyWindow("Pt 1 - Saturation ajdustment")
+            return adjustls,adjustus
+
+        else:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            hsv = cv2.GaussianBlur(hsv, (5,5), 0)
+            s = hsv[:,:, 1]
+            saturation = cv2.inRange(s ,adjustls,  adjustus)
+            cv2.imshow("Pt 1 - Saturation ajdustment", saturation)
+
+#----Função para extração dos parámetros de Hue inferior e superior
+def coloradjust(adjustls, adjustus):
+    img = np.zeros((1,512,3), np.uint8)
+    cv2.namedWindow('ADJUSTHUE')
+    switch1 = '0 : NOK \n1 : OK'
+    cv2.createTrackbar('uhue','ADJUSTHUE',0,179,nothing)
+    cv2.createTrackbar('lhue','ADJUSTHUE',0,179,nothing)
+    cv2.createTrackbar(switch1, 'ADJUSTHUE',0,1, nothing)
+
+    while (True):
+        ret, frame = cap.read()
+        cv2.imshow('ADJUSTHUE',img)
+    # Get current positions of four trackbars-----------------------------------
+        adjustuh = cv2.getTrackbarPos('uhue','ADJUSTHUE')
+        adjustlh = cv2.getTrackbarPos('lhue','ADJUSTHUE')
+        onoff = cv2.getTrackbarPos(switch1,'ADJUSTHUE')
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        if onoff == 1:
+            cv2.destroyWindow('ADJUSTHUE')
+            cv2.destroyWindow("Pt 4 - Color pick")
+            return adjustlh, adjustuh
+
+        else:
+            # How to separate each channel
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            #h = hsv[:,:,0]
+            s = hsv[:,:, 1]
+            #v = hsv[:, : 2]
+            #---------------------------------------------------------------------------
+            # Saturation mask adjustment
+            saturation = cv2.inRange(s ,adjustls,  adjustus)
+            gaussblur = cv2.GaussianBlur(saturation, (5,5), 0)
+            colormask = cv2.bitwise_and(hsv, hsv, mask = gaussblur )
+            colorselection = cv2.inRange(colormask, np.array([adjustlh, adjustls, 50]), np.array([adjustuh, adjustus, 255]) )
+            colordisplay = cv2.bitwise_and(frame, frame, mask = colorselection )
+
+            #cv2.imshow("Pt 2 - Gaussian Blur", gaussblur)
+            #cv2.imshow("Pt 3 - Color mask", colormask)
+            cv2.imshow("Pt 4 - Color pick", colordisplay)
+
+#----Função para a criação das mascaras de cor
+def findcolor(framehsv, lowhue, upperhue, lowsat, uppersat):
+    s = framehsv[:,:, 1]
+    saturation = cv2.inRange(s ,lowsat,  uppersat)
+    gaussblur = cv2.GaussianBlur(saturation, (5,5), 0)
+    colormask = cv2.bitwise_and(framehsv, framehsv, mask = gaussblur )
+    colorselection = cv2.inRange(colormask, np.array([lowhue, lowsat, 50]), np.array([upperhue, uppersat, 255]) )
+    #colordisplay = cv2.bitwise_and(frame, frame, mask = colorselection)
+    return colorselection
+
+#----Função para encontrar o centro da mascara extraida
+def findcenter(colorselection, frame, aspectratio, lowareasize, upareasize):
+    global zerox, zeroy
+    cnts = cv2.findContours(colorselection.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    cnts = cnts[0] if imutils.is_cv2() else cnts[1]
+
+    for c in cnts:
+        x,y,w,h = cv2.boundingRect(c)
+        #x = x - zerox
+        #y = y - zeroy
+        aspect = float(w)/h
+        if (aspect > 1):
+            aspect = float(1)/aspect
+        area = w*h
+        #print(aspect, area)
+        if (aspect > aspectratio  and (lowareasize <= area <= upareasize)):
+            #cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
+            #print(aspect, area)
+            #elipse = cv2.fitEllipse(c) #para retornar o angulo utilizar elipse[2]
+            centerx = x + w/2
+            centery = y + h/2
+            center = np.array([centerx,centery])
+            box = np.array([x,y,w,h])
+            size = True
+            cv2.drawContours(frame, [c], -1,(0, 255, 0), 2)
+            #print(elipse[2])
+            return center, box, frame, size
+        #else:
+            #cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
+            #print(aspect, area)
+
+    size = False
+    return np.array([0,0]), np.array([0,0,0,0]), frame, size
+
+#----Função de teste para encontrar o angulo de orienacao
+def findangle(alvox, alvoy,frentex, frentey, jogadorx, jogadory):
+##Retorna o angulo entre o Robo e o Ponto que ele quer chegar, ou seja
+# tem que fazer esse valor chegar a zero
+#Alvo = Chegada / Frente = Cor adotada como frente / Player = centro do robo
+    vetor_alvo = np.array([alvox - jogadorx, alvoy - jogadory])
+    vetor_dir = np.array([frentex - jogadorx, frentey-jogadory])
+    prod_esc = np.dot(vetor_alvo,vetor_dir)
+    mod_alvo = np.sqrt((vetor_alvo*vetor_alvo).sum())
+    mod_dir = np.sqrt((vetor_dir*vetor_dir).sum())
+    cos_ang = prod_esc/(mod_dir*mod_alvo)
+    angulo = narccos(cos_ang)
+    return angulo
+
+#----Funcao implementada para encontrar o angulo de orientacao
+def findangle2(ponto1x, ponto1y, ponto2x, ponto2y):
+    deltax = ponto1x - ponto2x
+    deltay = ponto1y - ponto2y
+    #if (-1) < deltax < 1:  #----Nao necessita de correcao de singularidade
+        #if deltay >= 0 :
+            #return 90
+        #else:
+            #return (-90)
+    #else:
+    return atan2(deltay,deltax)*(180/3.14)
+
+#----Funcao para obter a distancia entre dois pontos
+def dist(ptA, ptB): #Passado como np.array()
+    distancia = np.sqrt((ptaA[0]-ptB[0])**2 + (ptaA[1]-ptB[1])**2)
+    return distancia
+
+#----Def do  objeto robo
+class Jogador(object):
+
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+        self.ang = 0
+        self.veloc =0
+
+    def getX(self):
+        return self.x
+
+    def getY(self):
+        return self.y
+
+    def getAng(self):
+        return self.ang
+
+    def getVeloc(self):
+        return self.veloc
+
+    def setX(self, valorX):
+        self.x = valorX
+
+    def setY(self, valorY):
+        self.y = valorY
+
+    def setAng(self, valorAng):
+        self.ang = valorAng
+
+    def setVeloc(self, valorVeloc):
+        self.veloc = valorVeloc
+
+
+    pass
+
+#----Controle de posição por velocidade (Nao implementado)
+def controlePosicao(robo, coordX,coordY,ang,vfinal):
+    alfa = ang
+    #angulo final
+    beta = robo.getAng() #angulo do robo
+
+    teta = alfa-beta #angulo de erro
+
+    dx = coordX - robo.getX() # diferenca em X
+    dy = coordY - robo.getY() #diferenca em Y
+
+    Se = pow((pow(dx,2)+pow(dy,2)),0.5) #distancia entre o ponto inicial e final
+
+    Ve = robo.getVeloc()-vfinal #Erro de velocidade, veloficade final - velocidade real
+
+    d = 0 # 0 quando o robo gira em torno do eixo, 1 qdo realiza um movimento linear ou curvilineo
+
+    Kdp = 0 #Coeficiente proporcional para a distancia
+
+    Kdd = 0 #coeficiente derivativo para a velocidade
+
+    Kap = 0 #coeficiente proporcional para o angulo
+
+    Vr = (Kdp*Se + Kdd*Ve)*d - Kap*teta #Velocidade do motor da direita
+    Vl = (Kdp*Se + Kdd*Ve)*d + Kap*teta #Velocidade do motor da esquerda
+
+    return Vr,Vl
+
+#----funcao de distancia com o objeto
+def distancia(robo,CoordX,CoordY):
+
+    elem1 = pow(robo.getX() - CoordX,2)
+    elem2 = pow(robo.getY() - CoordY,2)
+
+    dist = np.sqrt(elem1 + elem2)
+
+    return dist
+
+
+#----Funcao de definicao de qual o melhor sentido de rotacao
+def sentido_rotacao(robo,ang):
+
+    if(robo.getAng() > 0 and ang > 0) or (robo.getAng() <0 and ang < 0):
+
+        if((robo.getAng()-ang) > 0):
+            return 'direita'
+        else:
+            return 'esquerda'
+
+    else:
+        if(robo.getAng() >0 and ang < 0):
+            if(((robo.getAng()-180)-ang) > 0):
+                return 'esquerda'
+            else:
+                return 'direita'
+        else:
+            if(((robo.getAng()+180)-ang) > 0):
+                return 'esquerda'
+            else:
+                return 'direita'
+
+#----Funcao de transmissao de qual a direcao e forca que o robo deve percorrer
+def movimento(direcao,forca,tempo):
+
+    if(direcao == 'frente'):
+
+        conexao.write("3"+":"+str(forca)+":"+tempo+"/")
+
+    elif(direcao == 'tras'):
+
+        conexao.write("4"+":"+str(forca)+":"+tempo+"/")
+
+    elif(direcao == 'direita'):
+
+         conexao.write("1"+":"+str(forca)+":"+tempo+"/")
+
+    elif(direcao == 'esquerda'):
+
+         conexao.write("2"+":"+str(forca)+":"+tempo+"/")
+
+    else:
+
+         conexao.write("5"+":"+str(forca)+":"+tempo+"/")
+
+contador =0
+contador1 =0
+
+#----Define forca do motor proporcional ao seguir reto
+def forca_motor_reto(robo,CoordX,CoordY):
+    dist = distancia(robo,CoordX,CoordY)
+    #Ajustar
+    valorErro = 150
+
+    if (dist > valorErro):
+        #andar com velocidade alta maxima
+        return 50
+
+    else:
+        velocidade = (50/valorErro)*dist
+
+    if(velocidade >= 50): return 50
+    if(velocidade <= 12): return 12
+
+    return velocidade
+
+#----Define forca proporcional do motor ao rotacionar
+def forca_motor_virando(robo,CoordX,CoordY,ang):
+
+    dist = abs(abs(ang)-abs(robo.getAng()))
+    #Ajustar
+    valorErroAng = 80
+
+    if (dist > valorErroAng):
+        #andar com velocidade alta maxima
+        return 20
+
+    else:
+        velocidade = (18/valorErroAng)*dist
+
+    if(velocidade >= 20): return 18
+    if(velocidade <= 12): return 12
+
+    return velocidade
+
+#----Funcao de controle simples implementado, corrige direcao e depois distancia
+def controlePosicaoSimples(robo,CoordX,CoordY,ang):
+
+    global contador,contador1
+    erroAngulo = 20
+    erroDist = 10
+    delay = 0
+    print(distancia(robo,CoordX,CoordY))
+
+    if (robo.getAng() < ang + erroAngulo and robo.getAng() > ang - erroAngulo):
+
+        if (distancia(robo,CoordX,CoordY) > 50 + erroDist):
+             #Mover pra frente
+             contador +=1
+             if(contador >= delay):
+                movimento('frente',forca_motor_reto(robo,CoordX,CoordY),'0')
+                #print("frente")
+                contador = 0
+        else:
+
+            movimento('parado',0,'0')
+            #print("parado")
+
+
+    else:
+
+        #Girar
+        contador1 +=1
+        if(contador1 >= delay):
+            movimento(sentido_rotacao(robo,ang),forca_motor_virando(robo,CoordX,CoordY,ang),'0')
+            #print("esquerda")
+            contador1 =0
+
+#-------------------------------------------------------------------------------
+# Start main program
+cap = cv2.VideoCapture(0)
+ret, frame = cap.read()
+#height, width, bpp = np.shape(frame)
+
+#----Teste para gravar video
+#fourcc = cv2.VideoWriter_fourcc(*'XVID')
+#out = cv2.VideoWriter('output.avi',fourcc, 20.0, (640,480))
+#----Variavel para achar o centro da tela
+#global zerox, zeroy
+#zerox = width/2
+#zeroy = height/2
+
+angulo_anterior = 0
+firstpass = True
+
+
+#------------
+# Pixels to meters
+#print("Proporcao de pixels para metros")
+size = 0.075 #tamanho do lado de um quadrado em metros
+#ratio = pixel2meters(frame, size)
+#print("ratio", ratio)
+ratio = 0.0017857142857142857
+ratiomm = ratio*1000
+
+#----Variavel para deixar os parametros fixos ou ajusta-los
+manual = False
+#    Set Parameters
+if manual == False:
+    adjustls = 60
+    adjustus = 255
+    bluelh = 95
+    blueuh = 110
+    greenlh = 72
+    greenuh = 90
+    orangelh = 10
+    orangeuh = 35
+
+else:
+#-------------------------------------------------------------------------------
+#    Ajuste Manual
+    adjustls, adjustus = satadjust()
+    bluelh, blueuh = coloradjust(adjustls, adjustus)
+    greenlh, greenuh = coloradjust(adjustls, adjustus)
+    orangelh, orangeuh = coloradjust(adjustls, adjustus)
+
+#----Parametros do filtro de Kalman
+state_size = 6
+meas_size = 4
+contr_size = 0
+
+
+kf = cv2.KalmanFilter(state_size, meas_size,contr_size )
+kf2 = cv2.KalmanFilter(state_size, meas_size,contr_size )
+kf3 = cv2.KalmanFilter(state_size, meas_size,contr_size )
+
+state = np.array([1, 1, 1, 1, 1, 1], np.float32) #[x,y,v_x,v_y,w,h]
+state2 = np.array([1, 1, 1, 1, 1, 1], np.float32) #[x,y,v_x,v_y,w,h]
+state3 = np.array([1, 1, 1, 1, 1, 1], np.float32) #[x,y,v_x,v_y,w,h]
+
+meas = np.array([1, 1, 1, 1], np.float32) #[z_x,z_y,z_w,z_h]
+meas2 = np.array([1, 1, 1, 1], np.float32) #[z_x,z_y,z_w,z_h]
+meas3 = np.array([1, 1, 1, 1], np.float32) #[z_x,z_y,z_w,z_h]
+
+proc_noise = np.array([1, 1, 1, 1, 1, 1]) #[E_x,E_y,E_v_x,E_v_y,E_w,E_h]
+proc_noise2 = np.array([1, 1, 1, 1, 1, 1]) #[E_x,E_y,E_v_x,E_v_y,E_w,E_h]
+proc_noise3 = np.array([1, 1, 1, 1, 1, 1]) #[E_x,E_y,E_v_x,E_v_y,E_w,E_h]
+
+kf.transitionMatrix = np.array([[1,0,0,0,0,0],
+                                [0,1,0,0,0,0],
+                                [0,0,1,0,0,0],
+                                [0,0,0,1,0,0],
+                                [0,0,0,0,1,0],
+                                [0,0,0,0,0,1]], np.float32)
+kf2.transitionMatrix = np.array([[1,0,0,0,0,0],
+                                [0,1,0,0,0,0],
+                                [0,0,1,0,0,0],
+                                [0,0,0,1,0,0],
+                                [0,0,0,0,1,0],
+                                [0,0,0,0,0,1]], np.float32)
+kf3.transitionMatrix = np.array([[1,0,0,0,0,0],
+                                [0,1,0,0,0,0],
+                                [0,0,1,0,0,0],
+                                [0,0,0,1,0,0],
+                                [0,0,0,0,1,0],
+                                [0,0,0,0,0,1]], np.float32)
+
+kf.measurementMatrix = np.array([[1,0,0,0,0,0],
+                                 [0,1,0,0,0,0],
+                                 [0,0,0,0,1,0],
+                                 [0,0,0,0,0,1]],np.float32)
+kf2.measurementMatrix = np.array([[1,0,0,0,0,0],
+                                 [0,1,0,0,0,0],
+                                 [0,0,0,0,1,0],
+                                 [0,0,0,0,0,1]],np.float32)
+kf3.measurementMatrix = np.array([[1,0,0,0,0,0],
+                                 [0,1,0,0,0,0],
+                                 [0,0,0,0,1,0],
+                                 [0,0,0,0,0,1]],np.float32)
+kf.processNoiseCov = np.array([[0.01,0,0,0,0,0],
+                               [0,0.01,0,0,0,0],
+                               [0,0,5,0,0,0],
+                               [0,0,0,5,0,0],
+                               [0,0,0,0,0.01,0],
+                               [0,0,0,0,0,0.01]], np.float32)
+kf2.processNoiseCov = np.array([[0.01,0,0,0,0,0],
+                               [0,0.01,0,0,0,0],
+                               [0,0,5,0,0,0],
+                               [0,0,0,5,0,0],
+                               [0,0,0,0,0.01,0],
+                               [0,0,0,0,0,0.01]], np.float32)
+kf3.processNoiseCov = np.array([[0.01,0,0,0,0,0],
+                               [0,0.01,0,0,0,0],
+                               [0,0,5,0,0,0],
+                               [0,0,0,5,0,0],
+                               [0,0,0,0,0.01,0],
+                               [0,0,0,0,0,0.01]], np.float32)
+kf.measurementNoiseCov = np.array([[0.1, 0, 0, 0],
+                                   [0, 0.1, 0, 0],
+                                   [0, 0, 0.1, 0],
+                                   [0, 0, 0, 0.1]], np.float32)
+kf2.measurementNoiseCov = np.array([[0.1, 0, 0, 0],
+                                   [0, 0.1, 0, 0],
+                                   [0, 0, 0.1, 0],
+                                   [0, 0, 0, 0.1]], np.float32)
+
+kf3.measurementNoiseCov = np.array([[0.1, 0, 0, 0],
+                                   [0, 0.1, 0, 0],
+                                   [0, 0, 0.1, 0],
+                                   [0, 0, 0, 0.1]], np.float32)
+ticks = 0
+found = notFoundCount = 0
+
+#------------
+#  Loop principal com o filtro de Kalman
+#cv2.namedWindow("find jogador")
+cv2.namedWindow("find2")
+
+robo1 = Jogador()
+
+while (1):
+    precTick = ticks
+    ticks = float(cv2.getTickCount())
+    dT = (ticks - precTick) / cv2.getTickFrequency()
+
+    ret, frame = cap.read()
+
+    if (found == True): #Se o jogador foi achado
+        #print ("found = true")
+        kf.transitionMatrix[0][2] = dT
+        kf.transitionMatrix[1][3] = dT
+
+        kf2.transitionMatrix[0][2] = dT
+        kf2.transitionMatrix[1][3] = dT
+
+        kf3.transitionMatrix[0][2] = dT
+        kf3.transitionMatrix[1][3] = dT
+
+        state = kf.predict()
+        state2 = kf2.predict()
+        state3 = kf3.predict()
+
+        center_player[0] = state[0]
+        center_player[1] = state[1]
+
+        center_frente[0] = state2[0]
+        center_frente[1] = state2[1]
+
+        center_bola[0] = state3[0]
+        center_bola[1] = state3[1]
+
+        box_player[0]= state[0] - state[4]/2
+        box_player[1] = state[1] - state[5]/2
+        box_predict = np.array([[box_player[0],box_player[1]],
+                                [state[4],state[5]]])
+        box_frente[0]= state2[0] - state2[4]/2
+        box_frente[1] = state2[1] - state2[5]/2
+        box_predict2 = np.array([[box_frente[0],box_frente[1]],
+                                [state2[4],state2[5]]])
+        box_bola[0]= state3[0] - state3[4]/2
+        box_bola[1] = state3[1] - state3[5]/2
+        box_predict3 = np.array([[box_bola[0],box_bola[1]],
+                                [state3[4],state3[5]]])
+        #cv2.circle(frame, (center_player[0], center_player[1]), 7, (255, 255, 255), -1)
+        #print(state[0], state[1], "x, y")
+        #print(state[2], state[3], "vx, vy")
+        # COLOCAR Funcao de desenhar retangulo
+
+    framehsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    findblue = findcolor(framehsv, bluelh, blueuh, adjustls, adjustus)
+    findgreen = findcolor(framehsv, greenlh, greenuh, adjustls, adjustus)
+    findball = findcolor(framehsv, orangelh, orangeuh, adjustls, adjustus)
+    findplayer =  findgreen + findblue
+    #cv2.imshow("find jogador", findblue)
+
+    # center player 500, 4500
+    center_player, box_player, player, number_cnts = findcenter(findplayer, frame, 0.8, 500, 4500)
+    # COMENTADO
+    center_frente, box_frente, frente, number_cnts_frente = findcenter(findblue, frame, 0.4, 500, 2500)
+    # COMENTADO
+    center_bola, box_bola, bola, number_cnts_bola = findcenter(findball, frame, 0.6, 200, 700)
+
+    if number_cnts == False:
+        #print("number_cnts = false")
+        notFoundCount += 1
+  #--------
+  # Esta linha configura o "timer" para a quantidade de imagens nao reconhecidas
+        if (notFoundCount == 20):
+            found = False
+  #--------
+    else:
+        #print("number_cnts = true")
+
+        notFoundCount = 0
+
+        meas[0] = box_player[0] + box_player[2]/2
+        meas[1] = box_player[1] + box_player[3]/2
+        meas[2] = float(box_player[2])
+        meas[3] = float(box_player[3])
+
+        meas2[0] = box_frente[0] + box_frente[2]/2
+        meas2[1] = box_frente[1] + box_frente[3]/2
+        meas2[2] = float(box_frente[2])
+        meas2[3] = float(box_frente[3])
+
+        meas3[0] = box_bola[0] + box_bola[2]/2
+        meas3[1] = box_bola[1] + box_bola[3]/2
+        meas3[2] = float(box_bola[2])
+        meas3[3] = float(box_bola[3])
+        if (found == False): #primeira deteccao
+            kf.errorCovPre[0][0] = 1
+            kf.errorCovPre[1][0] = 1
+            kf.errorCovPre[2][0] = 1
+            kf.errorCovPre[3][0] = 1
+            kf.errorCovPre[4][0] = 1
+            kf.errorCovPre[5][0] = 1
+
+            kf2.errorCovPre[0][0] = 1
+            kf2.errorCovPre[1][0] = 1
+            kf2.errorCovPre[2][0] = 1
+            kf2.errorCovPre[3][0] = 1
+            kf2.errorCovPre[4][0] = 1
+            kf2.errorCovPre[5][0] = 1
+
+            kf3.errorCovPre[0][0] = 1
+            kf3.errorCovPre[1][0] = 1
+            kf3.errorCovPre[2][0] = 1
+            kf3.errorCovPre[3][0] = 1
+            kf3.errorCovPre[4][0] = 1
+            kf3.errorCovPre[5][0] = 1
+
+            state[0] = meas[0]
+            state[1] = meas[1]
+            state[2] = 0
+            state[3] = 0
+            state[4] = meas[2]
+            state[5] = meas[3]
+
+            state2[0] = meas2[0]
+            state2[1] = meas2[1]
+            state2[2] = 0
+            state2[3] = 0
+            state2[4] = meas2[2]
+            state2[5] = meas2[3]
+
+            state3[0] = meas3[0]
+            state3[1] = meas3[1]
+            state3[2] = 0
+            state3[3] = 0
+            state3[4] = meas3[2]
+            state3[5] = meas3[3]
+            #print(type(state), state)
+            kf.statePost = state
+            kf2.statePost = state2
+            kf3.statePost = state3
+            found = True
+        else:
+            kf.correct(meas)
+            kf2.correct(meas2)
+            kf3.correct(meas3)
+
+#------------
+# Transferencia de informacoes para o controle
+    #print(state)
+    posjogadorx = state[0]#*ratiomm
+    posjogadory = state[1]#*ratiomm
+    veljogadorx = state[2]#*ratiomm
+    veljogadory = state[3]#*ratiomm
+
+    posfrentex = state2[0]#*ratiomm
+    posfrentey = state2[1]#*ratiomm
+    velfrentex = state2[2]#*ratiomm
+    velfrentey = state2[3]#*ratiomm
+
+    posbolax = state3[0]#*ratiomm
+    posbolay = state3[1]#*ratiomm
+    velbolax = state3[2]#*ratiomm
+    velbolay = state3[3]#*ratiomm
+    #print(veljogadorx,veljogadory)
+
+    # COMENTADO
+    #posfrentex = center_frente[0]#*ratiomm
+    # COMENTADO
+    #posfrentey = center_frente[1]#*ratiomm
+    # COMENTADO
+    cv2.circle(frame, (posfrentex, posfrentey), 3, (0, 0, 255), -1)
+    cv2.circle(frame, (state[0], state[1]), 4, (255, 255, 255), -1)
+    cv2.circle(frame, (posbolax,posbolay), 3,(255, 0, 0), -1)
+    # COMENTADO
+    cv2.line(frame, (state[0], state[1]), (posfrentex, posfrentey), (0,255,255),2)
+    # COMENTADO
+    angulo = findangle2(posjogadorx,posjogadory, posfrentex, posfrentey)
+
+    #print(angulo, posjogadorx, posjogadory)
+
+    #----Teste com a funcao de encontrar a direcao
+    #angulo2 = findangle2(posjogadorx,posjogadory, 575, 215)
+    # COMENTADO
+    angulo2 = findangle2(posjogadorx,posjogadory, center_bola[0]+2/ratiomm, center_bola[1]+2/ratiomm)
+
+#----Configuracao do robo
+    robo1.setX(posjogadorx)
+    robo1.setY(posjogadory)
+    # COMENTADO
+    robo1.setAng(angulo)
+
+    # COMENTADO
+    controlePosicaoSimples(robo1,center_bola[0],center_bola[1],angulo2)
+
+    if center_bola[0]==0 and center_bola[1]==0:
+        #print("entrou")
+        movimento('parado','20','30')
+    #print(center_bola)
+
+    #print (angulo_anterior, angulo, delta)
+    cv2.imshow('find2', frame)
+
+    #----TESTE GRAVAR ARQUIVO DE VIDEO
+    #out.write(frame)
+    #
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        movimento('parado','20','30')
+        break
+    #if cv2.waitKey(30) & 0xFF == 37:
+        #reset()
+cap.release()
+#out.release()
+cv2.destroyAllWindows()
